@@ -1,0 +1,420 @@
+---
+title: "An Investigation of California's Infectious Diseases"
+author: "Daniel Fields"
+date: "1/11/2019"
+output:
+   pdf_document:
+     latex_engine: xelatex
+---
+
+### SB Hacks 2019 Project
+#### Goal: Understand the relationship between gender, disease class, and the number of occurences of a disease in a given contracting different types of diseases.
+
+First we will install some packages to aid in our analysis.
+```{r, include = FALSE}
+install.packages(c("maps", "mapdata"), repos = "https://cloud.r-project.org/")
+install.packages("reshape2",repos = "https://cloud.r-project.org/")
+devtools::install_github("dgrtwo/gganimate",repos = "https://cloud.r-project.org/")
+```
+
+Next, we will load in the packages to our workspace so that we may use the functions within them.
+```{r library, message=FALSE}
+library(tidyverse)
+library(ggridges)
+library(tseries)
+library(cluster)
+library(maps)
+library(mapdata)
+library(ggmap)
+library(reshape2)
+library(gganimate)
+library(nnet)
+```
+
+Next, we will load in the data. This data comes from The California Department of Public Health (CDPH). 
+This data is formally titled: "Infectious Disease Data among California Residents by Disease, County, Sex, and Year, 2001-2014". The raw data is shown below. 
+```{r data,warning = FALSE} 
+setwd("/Users/DanielsMac/Desktop/SBHacks")
+#load data
+health_data <- read.csv("rows.csv")
+head(health_data)
+```
+Below we have some plots that analyze how counties of different sizes total infected persons vary by population. What we see is that smaller counties tend to have more variablity, but overall there is an upward trend to the number of incidents of infectious diseases over time. 
+```{r preEDA}
+#Get list of years present in data set
+years <- c(min(health_data$Year):max(health_data$Year))
+years.char <- as.character(years)
+
+#Plots to unerstand how many people get infected by all types of diseases
+health_data%>%
+  group_by(County,Year)%>%
+  mutate(Infection = sum(Count))%>%
+  filter(County != "California")%>%
+  filter(Population >= 1000000)%>%
+  select(County, Year,Infection)%>%
+  unique()%>%
+  arrange(Infection)%>%
+  ggplot(aes(x = Year, y = Infection, colour = County))+
+  geom_line()+
+  ggtitle("Number of Infected People in Counties with Population > 1,000,000")+
+  scale_x_discrete("Year", years, years.char, years)
+
+health_data%>%
+  group_by(County,Year)%>%
+  mutate(Infection = sum(Count))%>%
+  filter(County != "California")%>%
+  filter(Population > 90000 & Population < 110000)%>%
+  select(County, Year,Infection)%>%
+  unique()%>%
+  arrange(Infection)%>%
+  ggplot(aes(x = Year, y = Infection, colour = County))+
+  geom_line()+
+  ggtitle("Number of Infected People in Counties with Population around 100,000")+
+  scale_x_discrete("Year", years, years.char, years)
+
+health_data%>%
+  group_by(County,Year)%>%
+  mutate(Infection = sum(Count))%>%
+  filter(County != "California")%>%
+  filter(Population > 9000 & Population < 11000)%>%
+  select(County, Year,Infection)%>%
+  unique()%>%
+  arrange(Infection)%>%
+  ggplot(aes(x = Year, y = Infection, colour = County))+
+  geom_line()+
+  ggtitle("Number of Infected People in Counties with Population around 10,000")+
+  scale_x_discrete("Year", years, years.char, years)
+```
+### Relationsips between Variables
+So, in the original data, there are 64 different infectious diseases. To bring down the scale of our analysis, I decided to classify each disease into a classificaion.
+- Lethal Viral = disease is potentially lethal and caused by a virus 
+- Non-Lethal Viral = disease is caused by a virus
+- Lethal Bacterial = disease is potentially lethal and caused by a bacteria 
+- Non-Lethal Bacterial = disease is caused by a bacteria
+- Lethal Parasitic	parasitic = disease is potentially lethal and caused by parasites (fungus included)
+- Non-Lethal Parastic = disease is caused by parasites (fungus included)
+- STD	- Sexually Transmitted Disease
+- Vaccine-Preventable	(person who contracted disease of this category did not have a working vaccine)
+- Genetic - disease acts on protein synthesis.
+
+```{r disease.dictionary, warning = FALSE}
+#Load in the disease classifications.
+setwd("/Users/DanielsMac/Desktop/SBHacks")
+classes <- read.csv("classes.csv")
+
+health_data <- health_data%>%
+  mutate(Classification = 0)
+
+#Adding classifications to the individual diseases
+for(i in 1:length(health_data$Disease)){
+  for(j in 1:length(classes$Disease)){
+    if( health_data$Disease[i] == classes$Disease[j] ){
+      health_data$Classification[i] <- classes$Classification[j]
+    }
+  }
+}
+#remove rows that hold summary data
+health_data <- health_data%>%
+  mutate(Classification = as.factor(Classification))%>%
+  filter(County != "California")%>% #Ignore State Totals
+  filter(Sex != "Total")#Ignore Gender Totals
+
+
+class.print <- classes%>%
+  mutate(Classification = as.factor(Classification))
+levels(class.print$Classification) <- c("Lethal Viral", "Non-Lethal Viral", "Lethal Bacterial", "Non-Lethal Bacterial", "Lethal Parasitic", "Non-Lethal Parasitic", "STD", "Vaccine-Preventable", "Genetic")
+print("All of the different dieases present in our data and their subsequent classifications are:")
+class.print
+```
+
+
+Now we will examine the relationship between different infectious disease features. To accomplish this, I decided to group the data by the predictors we are interested in (Number of Cases per Year, Gender, Disease Classification) and then creating the subsequent plots.
+```{r}
+health_data2 <- health_data%>%
+  mutate(Classification = as.factor(Classification))%>%
+  filter(Sex != "Total")%>%
+  group_by(Sex,Classification,Year)%>%
+  mutate(Num.Cases = sum(Count))%>%
+   select(Sex, Num.Cases,Year,Classification)%>%
+  unique()
+print("First q0 rows of the data we will use for exploratory plots")
+head(health_data2,10)
+```
+
+These plots allow us to bettter understand the relationship between gender and different types of diseases. *Note: when comparing types of diseases I am not looking for difference between lethal and non-lethal within the same type of disease cause.* 
+```{r}
+#Gender vs STD
+health_data2%>%
+  filter(Classification == 7)%>%
+  ggplot(aes(x = Year, y = Num.Cases))+
+  geom_bar(aes(fill = Sex), stat = "identity",position = "dodge")+
+  scale_x_discrete("Year", years, years.char, years)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))+
+  ggtitle("Number of STD Cases by Gender in California over Time")+
+  xlab("Number of Observed Cases")
+```
+
+So, we can infer two things from this graph. First, we can sumize that within this data set, females have a higher rate of STD infection than do males. Second, we can observe that STD's are the most frequent class of infectious disease reported to the The California Department of Public Health (CDPH).
+
+```{r}
+#Gender vs Virus
+health_data2%>%
+  filter(Classification == 1 | Classification == 2)%>%
+  ggplot(aes(x = Year, y = Num.Cases))+
+  geom_bar(aes(fill = Sex), stat = "identity",position = "dodge")+
+  scale_x_discrete("Year", years, years.char, years)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))+
+  ggtitle("Number of Virulent Cases by Gender in California over Time")+
+  xlab("Number of Observed Cases")
+
+virusGrowth <- health_data%>%
+  filter(Classification == 1 | Classification == 2)%>%
+  filter(Year > 2009)%>%
+  #mutate(Year = as.factor(Year))%>%
+  select(Year, Disease,Count)%>%
+  group_by(Disease, Year)%>%
+  mutate(number_Cases = sum(Count))%>%
+  filter(number_Cases > 0)%>%
+  select(Year,Disease, number_Cases)%>%
+  unique()%>%
+  ggplot(aes(x = Year, y = number_Cases,fill = Disease))+
+  geom_bar(stat = "identity", position = "dodge", colour = "black")+
+  ggtitle("Virulent Infectious Disease occurenes 2010 - 2014")+
+  ylab("Number of Occurences (Males and Females)")
+
+virusGrowth
+```
+We can infer several things from these plots. First, we observe that virulent cases do not have a strong relation to gender, that is to say there does not exist a significant difference between the number of males and females who became infected with infectious virulent diseases. Seond, we can take note of the large spike in virulent cases in 2009 reported to the The California Department of Public Health (CDPH). This is mainly caused by the outbreak of the H1N1 Flu, also known as the Swine Flu in 2009. Lastly, We can also infer that the spike in virulent cases between 2010 and 2014 is caused mainly by increased cases of Influenza Death (<65 years of age), Listeriosis, Dengue, Hepatitis A, Hepatitis B Acute, and Hepatitis C Acute.
+
+```{r}
+#Gender vs Bacteria
+health_data2%>%
+  filter(Classification == 3 | Classification == 4)%>%
+  ggplot(aes(x = Year, y = Num.Cases))+
+  geom_bar(aes(fill = Sex), stat = "identity",position = "dodge")+
+  scale_x_discrete("Year", years, years.char, years)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))+
+  ggtitle("Number of Bacterial Cases by Gender in California over Time")+
+  xlab("Number of Observed Cases")
+```
+
+We can infer from this plot that bacterial cases do not have a strong relation to gender, that is to say there does not exist a significant difference between the number of males and females who became infected with an infectious bacterial disease.
+
+```{r}
+#Gender vs Parasite
+health_data2%>%
+  filter(Classification == 5 | Classification == 6)%>%
+  ggplot(aes(x = Year, y = Num.Cases))+
+  geom_bar(aes(fill = Sex), stat = "identity",position = "dodge")+
+  scale_x_discrete("Year", years, years.char, years)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))+
+  ggtitle("Number of Parasitic Cases by Gender in California over Time")+
+  xlab("Number of Observed Cases")
+
+paraGrowth <- health_data%>%
+  filter(Classification == 5 | Classification == 6)%>%
+  filter(Year > 2009)%>%
+  #mutate(Year = as.factor(Year))%>%
+  select(Year, Disease,Count)%>%
+  group_by(Disease, Year)%>%
+  mutate(number_Cases = sum(Count))%>%
+  filter(number_Cases > 0)%>%
+  select(Year,Disease, number_Cases)%>%
+  unique()%>%
+  ggplot(aes(x = Year, y = number_Cases, fill = Disease))+
+  geom_bar(stat = "identity", position = "dodge", colour = "black")+
+  ggtitle("Parasitic Infectious Diseases between 2010 - 2014")+
+  scale_fill_brewer(palette="Paired")+
+  ylab("Number of Occurences")
+
+paraGrowth
+```
+We can infer several things from these plots on parasites. First, we observe that parasitic cases do have a relation to gender, that is to say there does exist a significant difference between the number of males and females who became infected with infectious parasiric diseases. Seond, we can take note of the growth in parasitic cases between 2010 and 2014 reported to the The California Department of Public Health (CDPH). This is mainly caused by bacteria delivered from parasites coccidioidomycosis, also called Valley Fever, an infection caused by the fungus Coccidioides. According to the CDC, Coccidioides lives in dust and soil in some areas in the southwestern United States, Mexico, and South America. In the United States, Coccidioides lives in Arizona, California, Nevada, New Mexico, Texas, and Utah. So, I would speculate that the California Wildfires are a factor in the increased cases of Valley Fever. [https://www.cdc.gov/fungal/diseases/coccidioidomycosis/index.html]. Second main cause of growth is by the parasite giardiasis which causes Giardia. According to the Mayo Clinic, Giardia infection is an intestinal infection marked by abdominal cramps, bloating, nausea and bouts of watery diarrhea. Giardia infection is caused by a microscopic parasite that is found worldwide, especially in areas with poor sanitation and unsafe water.[https://www.mayoclinic.org/diseases-conditions/giardia-infection/symptoms-causes/syc-20372786]. I would speculate, it could be the case that climate change contributing to larger storms, which can cause floods and large surf conditions, could be a possible cause for the increases in cases of Giardia.
+
+```{r}
+#Gender vs Vaccinated Diseases
+health_data2%>%
+  filter(Classification == 8)%>%
+  ggplot(aes(x = Year, y = Num.Cases))+
+  geom_bar(aes(fill = Sex), stat = "identity",position = "dodge")+
+  scale_x_discrete("Year", years, years.char, years)+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))+
+  ggtitle("Number of Vaccine Preventable Disease Cases by Gender in California over Time")+
+  xlab("Number of Observed Cases")
+```
+This plot shows there does not exist a significant difference between the number of females and males who become infected with infectious diseases for which a vaccine exists. Both of the large spikes are caused by outbreaks of whooping cough in california. In 2010, a whooping cough outbreak in California sickened 9,120 people, more than in any year since 1947.[https://www.npr.org/sections/health-shots/2013/09/25/226147147/vaccine-refusals-fueled-californias-whooping-cough-epidemic] In the paper, *"Nonmedical Vaccine Exemptions and Pertussis in California, 2010"* written by Jessica E. Atwell, Josh Van Otterloo, Jennifer Zipprich, Kathleen Winter, Kathleen Harriman, Daniel A. Salmon, Neal A. Halsey, Saad B. Omer of Johns Hopkins Bloomberg School of Public Health found that people who lived in areas with high rates of personal belief exemptions were 2 1/2 times more likely to live in a place with lots of pertussis cases.[http://pediatrics.aappublications.org/content/132/4/624.abstract]. Which is to say this outbreak can be explained by people not wanting to vaccinate their children. Again in 2014, the California Department of Public Health (CDPH) declared that a pertussis epidemic was occurring in the stated that the incidence of pertussis in the United States is cyclical, with peaks every 3–5 years, as the number of susceptible persons in the population increases.Additionally, they report that [the] "CDPH is working with local public health departments as well as prenatal and pediatric health care providers, with the primary goal of encouraging vaccination of pregnant women and infants. In addition, CDPH is providing free Tdap to local health departments and community health centers to support vaccination of uninsured and underinsured pregnant women and is working to identify and mitigate barriers to Tdap vaccination for pregnant women."[https://www.cdc.gov/mmWr/preview/mmwrhtml/mm6348a2.htm] So, one could speculate as healthcare costs continue to be inafforable to many people and the * anti-vaxx* movement remains, the whooping cough will contniue to cycle with an outbreak every 3-5 years.
+
+## Machine Learning
+
+In this portion of the analysis, we wish to Predict the gender of an infected person disease based on the disease class they have become infected with and the number of people who contracted the disease of class i in year j using a Multinomial Logistic Regression. More formally, 
+$$Y_i = \text{ Gender of person i}$$
+$$d_i = \text{ disease classification of person-i, where}$$
+$$i = \text{Lethal Virulent, Non-Lethal Virulent, Lethal Bacterial, ... , Genetic}$$
+$$t_{ij} = \text{number of cases of diease-i in year-j}$$
+First we will seperate the data into the train and test splits, so that we can evaluate our model after we create it.
+
+I am deciding to use a 60:40 ratio to split the data. So then, 60% of the observations will be used to train the model and 40% of the observations will be used to test the model. 
+```{r train_test}
+#Examine Data
+
+health_ML <- health_data%>%
+  group_by(Year,Classification,Sex)%>%
+  mutate(Year.Count = sum(Count))%>%
+  select(Year,Classification,Year.Count,Sex)%>%
+  filter(Sex != "Total")%>%
+  unique()%>%
+  ungroup()
+
+#Rename classes to reflect what the classifications mean:
+levels(health_ML$Classification) <- c("Lethal Viral", "Non-Lethal Viral", "Lethal Bacterial", "Non-Lethal Bacterial", "Lethal Parasitic", "Non-Lethal Parasitic", "STD", "Vaccine-Preventable", "Genetic")
+#Examine Data that will be used for prediction:
+head(health_ML)
+#We only need the predictors
+#Establish cut-off point
+cutoff <- round(0.6*dim(health_ML)[1],0)
+
+#Establish training and testing sets by randomly sampling from the data with the above ratios for test and training sets.
+#Set seed for reproducability
+set.seed(3)
+training_indexes <- sample.int(nrow(health_ML), size = cutoff, replace = FALSE, prob = NULL)
+health_train <- health_ML[training_indexes,]
+health_test <- health_ML[-training_indexes,]
+```
+** Gaining Intuition on Model 1.**
+```{r}
+genderProportions <- group_by(health_data,Classification,Sex)%>%
+  summarise(count = sum(Count))%>%
+  group_by(Classification)%>%
+  mutate(classTotals = sum(count),proportion = count/classTotals)
+
+ggplot(genderProportions, aes(x = Classification, y = proportion, group = Sex, linetype = Sex))+
+  geom_line()+
+  xlab("Infectious Disease Classification")+
+  ylab("Proportion")+
+  ggtitle("Gender Difference in Number of Observed Infected Individuals by Disease Class")
+```
+
+We observe that there does exist difference in the number of instances of a certain classs of infectious diseases for males and females. 
+
+```{r}
+timeProportions <- health_data%>%
+  mutate(Year = as.factor(Year))%>%
+  group_by(Classification,Year)%>%
+  summarise(count = sum(Count))%>%
+  group_by(Year)%>%
+  mutate(timeTotals = sum(count),proportion = count/timeTotals)
+
+ggplot(timeProportions, aes(x = Classification, y = proportion, group = Year, colour = Year))+
+  geom_line()+
+  xlab("Infectious Disease Classification")+
+  ylab("Proportion")+
+  ggtitle("Yearly Difference in Number of Observed Infected Individuals by Disease Class")
+```
+We observe that there does not exist a difference in the number of instances of a certain infectious disease by year. 
+
+```{r}
+health_ML%>%
+  ggplot(aes(x = Classification,y = Year.Count, colour = Classification))+
+  geom_point()+
+  ggtitle("Number of Occurences of the Disease Classifications")+
+  ylab("Annual Count (Each Point represents a different Year)")+
+  coord_flip()
+#Examine what proportion of the data is an STD
+is.STD <- paste(round(table(health_ML$Classification == "STD")/length(health_ML$Classification),2)*100, "%")
+names(is.STD) <- c("Percentage STD", "Percentage of Non-STD")
+```
+So, we do observe that the number of occurences of a certain class of infectious diseases does correlate to the number of occurences of infection. However, we do observe a large number of the classifications are classified as STD's. In fact, `r is.STD` is what we have, with about 87% of all data points being of classification STD.
+
+Next we will predict whether a given individual is a male or a female as a function of the class of disease the person has contracted and the number of people who had that disease that year.
+
+```{r}
+ggplot(health_test, aes(x = Year.Count, y = Classification, colour = Sex))+
+  geom_point(aes(alpha = 0.2))+
+  xlab("Number of Occurences by Year")+
+  ggtitle("Basic Model Idea")
+```
+So, we see that for STD's we would expect that the model will classify the gender of infected indiviuals well and for diseases with less observations we would expect the model to  have less accuracy. And since 87% of the values have classification STD, and STD's tend to be more frequently observed in females, it is likely our model will be biased towards predicting the gender of an unobserved person as female. 
+
+
+#### Modeling
+
+```{r model}
+#Create Model:
+multiLogitModelAll <- multinom(Sex ~ Year + Classification + Year.Count, health_train)
+
+#Use Akaike Information Criterion (AIC) to select a model. This will penalize unneccessary predictor variables. It does this by minimizing information loss that accompanies the .
+modelAIC <- step(multiLogitModelAll)
+
+#Examine the Model's Coefficients
+summary(modelAIC)
+```
+
+#### Examining the Performance of our Multinomial Logistic Regression Model.
+```{r modelPerformance}
+#Split test set into true values and predictors which we will use on our model to evaluate its performance
+health_test.X <- health_test%>%
+  select(Classification,Year.Count)
+health_test.Y <- health_test%>%
+  select(Sex)
+
+#Predict the gender of individuals in our test set the Multinomial Logistic Regression Model
+predictedSex <- predict(modelAIC, health_test)
+
+#Examining Model Performance:
+
+confusion_matrix <- matrix(nrow = 2, ncol = 2,0)
+colnames(confusion_matrix) <- c("Observed Male", "Observed Female")
+rownames(confusion_matrix) <- c("Precited Male", "Predicted Female")
+
+for(i in predictedSex){
+  for(j in health_test.Y$Sex){
+    if(i == "Male" & j == "Male"){
+      confusion_matrix[1,1] <- confusion_matrix[1,1] + 1
+    }
+    if(i == "Female" & j == "Male"){
+      confusion_matrix[2,1] <- confusion_matrix[2,1] + 1
+    }
+    if(i == "Male" & j == "Female"){
+      confusion_matrix[1,2] <- confusion_matrix[1,2] + 1
+    }
+    if(i == "Female" & j == "Female"){
+      confusion_matrix[2,2] <- confusion_matrix[2,2] + 1
+    }
+  }
+}
+#Plot results of prediction
+data.frame(Predicted = predictedSex, Observed = health_test.Y$Sex)%>%
+  mutate()
+
+#Display Confusion Matrix
+confusion_matrix
+#calculate performance metrics
+recall <- confusion_matrix[1,1]/(confusion_matrix[1,1]+confusion_matrix[1,2])
+precision <- confusion_matrix[1,1]/(confusion_matrix[1,1]+confusion_matrix[2,1])
+accuracy <- (confusion_matrix[1,1] + confusion_matrix[2,2])/(confusion_matrix[1,1]+confusion_matrix[1,2] + confusion_matrix[2,1]+confusion_matrix[2,2])
+```
+
+A confusion matrix is a tool that will allow us to better quantify how well our model actually classifies. There does not exist any inherent postive or negative class for gender. Unforunately, the confusion the utility of the confusion matrix is usually in the context classifying the status of af event happening, in which case it is useful to think of the event you are classifying as positive (the event did happen) versus negative (the event did not happen). 
+- If one predicts positive and the true value is a positive this is called a true positive.
+- If one predicts positive and the true value is a negative this is called a false positive. 
+- If one predicts negative and the true value is a positive this is called a true negative.
+- If one predicts negative and the true value is a positive this is called a false negative. 
+
+From the confusion matrix, one can create metrics that gauge the performance of the model, mainly Precision, Recall, and Accuracy.
+$$\text{Precision} = \frac{\text{True Positive Predictions}}{\text{Observed Results}}$$
+$$\text{Recall} = \frac{\text{True Positive Predictions}}{\text{Predicted Results}}$$
+$$\text{Accuraccy} = \frac{\text{True Positive + True Negative Predictions}}{\text{Total}}$$
+Precision means the percentage of your results which are relevant. On the other hand, recall refers to the percentage of total relevant results correctly classified by your algorithm.[https://towardsdatascience.com/precision-vs-recall-386cf9f89488] And Accuracy measures how well our model predicts values. Here we have that:
+* Recall = `r recall`
+* Precision = `r precision`
+* Accuracy = `r accuracy`
+
+These results make sense since we have a much higher number of observations of females with STD's than males with STD's, and given how common observations of STD's are in our data, it makes sense that the model has a bias towards predicting Sex as female which drives down the accuracy.
+
+### Next Steps:
+
+Due to the low accuracy score, steps should be taken in the future to make the model perform better. 
+
+1. Get more data. After the proccessing and grouping we were left with only 222 values, and after splitting the data into train and test sets, the model is likely not able to make enough of a fit with the amount of data I am working with.
+2. Implement a model that has a higher ability to fit data with less observations, possibly K-Nearest Neighbors or a Hierarchal Clustering Tree.
+3. Build a model that aims to predict the class of disease based on gender and number of occurences. Possibly, a k-means clustering analysis or a bayesian hierarchal model in which we specify prior parameters about the distribution of different classes of diseases.  

@@ -1,0 +1,66 @@
+﻿Disease,Classification
+Amebiasis,6
+Anaplasmosis and Ehrlichiosis,5
+Babesiosis,5
+"Botulism, Foodborne",3
+"Botulism, Other",3
+"Botulism, Wound",3
+Brucellosis,4
+Campylobacteriosis,4
+Chlamydia,7
+Cholera,3
+Ciguatera Fish Poisoning,6
+Coccidioidomycosis,6
+Creutzfeldt-Jakob Disease and other Transmissible Spongiform Encephalopathies,9
+Cryptosporidiosis,6
+Cyclosporiasis,6
+Cysticercosis or Taeniasis,5
+Dengue,1
+Diphtheria,8
+E. coli O157,4
+E. coli Other STEC (non-O157),4
+Early Syphilis,7
+Giardiasis,6
+Gonorrhea,7
+Hantavirus Infection,1
+Hemolytic Uremic Syndrome,3
+Hepatitis A,1
+"Hepatitis B, Acute",2
+"Hepatitis C, Acute",2
+"Hepatitis E, acute infection",2
+HIV,7
+Influenza Death (<65 years of age),1
+Invasive Meningococcal Disease,3
+Legionellosis,4
+Leprosy,4
+Leptospirosis,3
+Listeriosis,1
+Lyme Disease,3
+Malaria,4
+Measles,8
+Mumps,8
+Paralytic Shellfish Poisoning,3
+Pertussis,8
+"Plague, human",3
+Psittacosis,4
+Q Fever,4
+"Rabies, human",1
+Relapsing Fever,4
+Rubella,2
+Salmonellosis,4
+Scombroid Fish Poisoning,4
+Shiga Toxin Positive Feces (without culture confirmation),4
+Shigellosis,4
+Spotted Fever Rickettsiosis,4
+Staphylococcus aureus Infection (cases resulting in death or ICU),3
+Streptococcal Infection (cases in food and dairy workers),4
+Tetanus,8
+Toxic Shock Syndrome (Non-Streptococcal),3
+Trichinosis,6
+Tuberculosis,3
+Tularemia,3
+"Typhoid Fever, case",4
+Typhus Fever,4
+Varicella Hospitalizations,8
+Vibrio Infection (non-Cholera),4
+Yersiniosis,4
