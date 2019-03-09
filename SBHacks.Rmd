@@ -11,10 +11,12 @@ output:
 #### Goal: Understand the relationship between gender, disease class, and the number of occurences of a disease in a given contracting different types of diseases.
 
 First we will install some packages to aid in our analysis.
-```{r, include = FALSE}
+```{r, results = 'hide'}
 install.packages(c("maps", "mapdata"), repos = "https://cloud.r-project.org/")
 install.packages("reshape2",repos = "https://cloud.r-project.org/")
 devtools::install_github("dgrtwo/gganimate",repos = "https://cloud.r-project.org/")
+install.packages("ROCR",repos = "https://cloud.r-project.org/")
+install.packages("caret",repos = "https://cloud.r-project.org/")
 ```
 
 Next, we will load in the packages to our workspace so that we may use the functions within them.
@@ -29,6 +31,8 @@ library(ggmap)
 library(reshape2)
 library(gganimate)
 library(nnet)
+library(ROCR)
+library(caret)
 ```
 
 Next, we will load in the data. This data comes from The California Department of Public Health (CDPH). 
@@ -123,9 +127,20 @@ health_data <- health_data%>%
 class.print <- classes%>%
   mutate(Classification = as.factor(Classification))
 levels(class.print$Classification) <- c("Lethal Viral", "Non-Lethal Viral", "Lethal Bacterial", "Non-Lethal Bacterial", "Lethal Parasitic", "Non-Lethal Parasitic", "STD", "Vaccine-Preventable", "Genetic")
-print("All of the different dieases present in our data and their subsequent classifications are:")
-class.print
 ```
+In total, there were 65 different diseases in the dataset. To reduce dimmensions of the classification problem in later parts of this analysis I hand-classified each disease into a category based on the causing factor of the disease. For example, Chalmydia is classified as STD, and Babesiosis a disease caused from tick bites is classified as Parasitic. Beyond this, the diseases were classified into whether or not they are lethal. My basis of this was if the CDC of WHO said normal recovery involved little to no treatment, or if lethal cases were very rare then I stated the disease was non-lethal. Similarly, if the CDC or WHO stated treatment was needed to prevent death or severe bodily harm, I classified the disease as lethal. After this, I got the following categories:
+
+| **Classification** |                                                                                             |
+|-----------------|-----------------------------------------------------------------------------------------------------|
+| 1               | Lethal Viral                                                                                        |
+| 2               | Non-Lethal Viral                                                                                    |
+| 3               | Lethal Bacterial                                                                                    |
+| 4               | Non-Lethal Bacterial                                                                                |
+| 5               | Lethal Parasitic (fungus included)                                                                  |
+| 6               | Non-Lethal Parastic                                                                                 |
+| 7               | STD                                                                                                 |
+| 8               | Vaccine-Preventable (person who contracted disease of this category did not have a working vaccine) |
+| 9               | Genetic                                                                                             |
 
 
 Now we will examine the relationship between different infectious disease features. To accomplish this, I decided to group the data by the predictors we are interested in (Number of Cases per Year, Gender, Disease Classification) and then creating the subsequent plots.
@@ -229,7 +244,7 @@ paraGrowth <- health_data%>%
 
 paraGrowth
 ```
-We can infer several things from these plots on parasites. First, we observe that parasitic cases do have a relation to gender, that is to say there does exist a significant difference between the number of males and females who became infected with infectious parasiric diseases. I would speculate that this is due to the fact that the Agriculture, Forestry, Fishing, and Hunting Industry has an gender employment rate of 74.1% men.[https://www.bls.gov/cps/cpsaat18.htm] Second, we can take note of the growth in parasitic cases between 2010 and 2014 reported to the The California Department of Public Health (CDPH). This is mainly caused by bacteria delivered from parasites coccidioidomycosis, also called Valley Fever, an infection caused by the fungus Coccidioides. According to the CDC, Coccidioides lives in dust and soil in some areas in the southwestern United States, Mexico, and South America. In the United States, Coccidioides lives in Arizona, California, Nevada, New Mexico, Texas, and Utah. So, I would speculate that the California Wildfires are a factor in the increased cases of Valley Fever. [https://www.cdc.gov/fungal/diseases/coccidioidomycosis/index.html]. Second main cause of growth is by the parasite giardiasis which causes Giardia. According to the Mayo Clinic, Giardia infection is an intestinal infection marked by abdominal cramps, bloating, nausea and bouts of watery diarrhea. Giardia infection is caused by a microscopic parasite that is found worldwide, especially in areas with poor sanitation and unsafe water.[https://www.mayoclinic.org/diseases-conditions/giardia-infection/symptoms-causes/syc-20372786]. I would speculate, it could be the case that climate change contributing to larger storms, which can cause floods and large surf conditions, could be a possible cause for the increases in cases of Giardia.
+We can infer several things from these plots on parasites. First, we observe that parasitic cases do have a relation to gender, that is to say there does exist a significant difference between the number of males and females who became infected with infectious parasiric diseases. Seond, we can take note of the growth in parasitic cases between 2010 and 2014 reported to the The California Department of Public Health (CDPH). This is mainly caused by bacteria delivered from parasites coccidioidomycosis, also called Valley Fever, an infection caused by the fungus Coccidioides. According to the CDC, Coccidioides lives in dust and soil in some areas in the southwestern United States, Mexico, and South America. In the United States, Coccidioides lives in Arizona, California, Nevada, New Mexico, Texas, and Utah. So, I would speculate that the California Wildfires are a factor in the increased cases of Valley Fever. [https://www.cdc.gov/fungal/diseases/coccidioidomycosis/index.html]. Second main cause of growth is by the parasite giardiasis which causes Giardia. According to the Mayo Clinic, Giardia infection is an intestinal infection marked by abdominal cramps, bloating, nausea and bouts of watery diarrhea. Giardia infection is caused by a microscopic parasite that is found worldwide, especially in areas with poor sanitation and unsafe water.[https://www.mayoclinic.org/diseases-conditions/giardia-infection/symptoms-causes/syc-20372786]. I would speculate, it could be the case that climate change contributing to larger storms, which can cause floods and large surf conditions, could be a possible cause for the increases in cases of Giardia.
 
 ```{r}
 #Gender vs Vaccinated Diseases
@@ -246,6 +261,7 @@ This plot shows there does not exist a significant difference between the number
 
 ## Machine Learning
 
+### Multinomial Logistic Regression
 In this portion of the analysis, we wish to Predict the gender of an infected person disease based on the disease class they have become infected with and the number of people who contracted the disease of class i in year j using a Multinomial Logistic Regression. More formally, 
 $$Y_i = \text{ Gender of person i}$$
 $$d_i = \text{ disease classification of person-i, where}$$
@@ -263,7 +279,8 @@ health_ML <- health_data%>%
   select(Year,Classification,Year.Count,Sex)%>%
   filter(Sex != "Total")%>%
   unique()%>%
-  ungroup()
+  ungroup()%>%
+  mutate(Sex = droplevels(Sex, "Total"))
 
 #Rename classes to reflect what the classifications mean:
 levels(health_ML$Classification) <- c("Lethal Viral", "Non-Lethal Viral", "Lethal Bacterial", "Non-Lethal Bacterial", "Lethal Parasitic", "Non-Lethal Parasitic", "STD", "Vaccine-Preventable", "Genetic")
@@ -351,47 +368,13 @@ summary(modelAIC)
 
 #### Examining the Performance of our Multinomial Logistic Regression Model.
 ```{r modelPerformance}
-#Split test set into true values and predictors which we will use on our model to evaluate its performance
-health_test.X <- health_test%>%
-  select(Classification,Year.Count)
-health_test.Y <- health_test%>%
-  select(Sex)
+
 
 #Predict the gender of individuals in our test set the Multinomial Logistic Regression Model
-predictedSex <- predict(modelAIC, health_test)
+predictedSex <- predict(modelAIC, health_test[,1:3], type = "class")
 
 #Examining Model Performance:
-
-confusion_matrix <- matrix(nrow = 2, ncol = 2,0)
-colnames(confusion_matrix) <- c("Observed Male", "Observed Female")
-rownames(confusion_matrix) <- c("Precited Male", "Predicted Female")
-
-for(i in predictedSex){
-  for(j in health_test.Y$Sex){
-    if(i == "Male" & j == "Male"){
-      confusion_matrix[1,1] <- confusion_matrix[1,1] + 1
-    }
-    if(i == "Female" & j == "Male"){
-      confusion_matrix[2,1] <- confusion_matrix[2,1] + 1
-    }
-    if(i == "Male" & j == "Female"){
-      confusion_matrix[1,2] <- confusion_matrix[1,2] + 1
-    }
-    if(i == "Female" & j == "Female"){
-      confusion_matrix[2,2] <- confusion_matrix[2,2] + 1
-    }
-  }
-}
-#Plot results of prediction
-data.frame(Predicted = predictedSex, Observed = health_test.Y$Sex)%>%
-  mutate()
-
-#Display Confusion Matrix
-confusion_matrix
-#calculate performance metrics
-recall <- confusion_matrix[1,1]/(confusion_matrix[1,1]+confusion_matrix[1,2])
-precision <- confusion_matrix[1,1]/(confusion_matrix[1,1]+confusion_matrix[2,1])
-accuracy <- (confusion_matrix[1,1] + confusion_matrix[2,2])/(confusion_matrix[1,1]+confusion_matrix[1,2] + confusion_matrix[2,1]+confusion_matrix[2,2])
+confusionMatrix(predictedSex, health_test$Sex)
 ```
 
 A confusion matrix is a tool that will allow us to better quantify how well our model actually classifies. There does not exist any inherent postive or negative class for gender. Unforunately, the confusion the utility of the confusion matrix is usually in the context classifying the status of af event happening, in which case it is useful to think of the event you are classifying as positive (the event did happen) versus negative (the event did not happen). 
@@ -400,21 +383,89 @@ A confusion matrix is a tool that will allow us to better quantify how well our 
 - If one predicts negative and the true value is a positive this is called a true negative.
 - If one predicts negative and the true value is a positive this is called a false negative. 
 
-From the confusion matrix, one can create metrics that gauge the performance of the model, mainly Precision, Recall, and Accuracy.
-$$\text{Precision} = \frac{\text{True Positive Predictions}}{\text{Observed Results}}$$
-$$\text{Recall} = \frac{\text{True Positive Predictions}}{\text{Predicted Results}}$$
 $$\text{Accuraccy} = \frac{\text{True Positive + True Negative Predictions}}{\text{Total}}$$
-Precision means the percentage of your results which are relevant. On the other hand, recall refers to the percentage of total relevant results correctly classified by your algorithm.[https://towardsdatascience.com/precision-vs-recall-386cf9f89488] And Accuracy measures how well our model predicts values. Here we have that:
-* Recall = `r recall`
-* Precision = `r precision`
-* Accuracy = `r accuracy`
+Precision means the percentage of your results which are relevant. On the other hand, recall refers to the percentage of total relevant results correctly classified by your algorithm.[https://towardsdatascience.com/precision-vs-recall-386cf9f89488] And Accuracy measures how well our model predicts values. Here we have that a 95% Confidence Interval for the accuracy of this model is between 39.75% and 61.33%.
 
-These results make sense since we have a much higher number of observations of females with STD's than males with STD's, and given how common observations of STD's are in our data, it makes sense that the model has a bias towards predicting Sex as female which drives down the accuracy.
+Alternitvely, we can examine the Area Under Curve(AUC) of the ROC. ROC is the Receiver Operating Characteristics of a model, ROC is a probability curve and AUC represents degree or measure of separability. It tells how much model is capable of distinguishing between classes. Higher the AUC, better the model is at predicting 0s as 0s and 1s as 1s. By analogy, Higher the AUC, better the model is at distinguishing between patients with that are and those that are female. Ideally, a good model's ROC curve hugs the top left of the plot indicating the model recognizes true positives and not false positives. Our ROC curve is,
+```{r}
+preds <- predict(modelAIC,health_test[c("Year","Classification","Year.Count")],type = "class")
+actual <- droplevels(health_test$Sex, exclude = "Total")
 
-### Next Steps:
+perf.multinomial <- performance(prediction(predictions = as.numeric(preds), as.numeric(actual)), measure="tpr", x.measure="fpr")
 
-Due to the low accuracy score, steps should be taken in the future to make the model perform better. 
+#ROC tree
+plot(perf.multinomial, col=2, lwd=3, main="ROC Curve Multinomial Logistic Regression", xlab = "False Positive Rate", ylab = "True Positive Rate")
+abline(0,1)
+```
+These results make sense since we have a much higher number of observations of females with STD's than males with STD's, and given how common observations of STD's are in our data, it makes sense that the model has a bias towards predicting Sex as female which drives down the accuracy. This explination is supported by evidence the coefficient associated with disease classification STD has a maximum-likelihood coefficient orders greater than other coefficients. Furthermore, the `caret` package reaffirms this by stating that `'Positive' Class : Female` which means that our model is positively biased towards predicting an infected person's gender as female since females have a higher rate of STDs *within this dataset*, and STD's account for a large plurality of all observed classes of infectious diseases in California.
 
-1. Get more data. After the proccessing and grouping we were left with only 222 values, and after splitting the data into train and test sets, the model is likely not able to make enough of a fit with the amount of data I am working with.
-2. Implement a model that has a higher ability to fit data with less observations, possibly K-Nearest Neighbors or a Hierarchal Clustering Tree.
-3. Build a model that aims to predict the class of disease based on gender and number of occurences. Possibly, a k-means clustering analysis or a bayesian hierarchal model in which we specify prior parameters about the distribution of different classes of diseases.  
+### KNN using 9-fold cross-validation:
+
+The goal of this section is to test whether other methods of learning will achieve better results. I will be using a knn algorithm and 9-fold cross validation to train the model using the `caret` package. 
+
+
+```{r}
+#Set seed for reproducability
+set.seed(3)
+
+#Instantiate Cross Validation Fold ID's
+trControl <- trainControl(method  = "cv",
+                          number  = 9)
+#Train model
+fit <- train(Sex ~ .,
+             method     = "knn",
+             tuneGrid   = expand.grid(k = 1:50),
+             trControl  = trControl,
+             metric     = "Accuracy",
+             data       = health_train)
+
+#Plot errors vs k
+ggplot(fit$results,aes(x = k, y = Accuracy))+
+  geom_line(aes(colour = Accuracy))+
+  geom_point(aes(colour = Accuracy))+
+  xlab("k Neighbors")+
+  ylab("Validation Error")+
+  ggtitle("Cross Validation Error Estimation for k Number of Neighbors")
+#Select best k
+best_k = fit$results$k[which(fit$results$Accuracy == max(fit$results$Accuracy))]
+```
+
+Since, the final value used for the model was k = `r best_k`. Then, we can now build a KNN classifier with k = `r best_k`, and then again check the testing error to see if KNN outperforms the Multinomial Logistic Regression Classifier.
+
+```{r}
+#Predict gender labels in test data
+knnPredict <- predict(fit,newdata = health_test[c("Year", "Classification","Year.Count")])
+
+#Note I now realize there is an existing function in R to create the confusion matrix, so I will that here instead of manually calculating it
+x <- confusionMatrix(knnPredict, health_test$Sex)
+
+
+score <- round(x$overall["Accuracy"]*100,2)
+lower_bound_accuracy <- round(x$overall["AccuracyLower"]*100,2)
+upper_bound_accuracy <- round(x$overall["AccuracyUpper"]*100,2)
+
+x
+```
+So, the KNN classifier recieved an accuracy score of `r score`% and a 95% Confidence Interval for the accuracy of the KNN model is that the accuracy lie between `r lower_bound_accuracy`% and `r upper_bound_accuracy`%. Furthermore, we again see the same positive bias towards predicting the gender of an infected person as female.
+
+Thus, the KNN classifier did outperform the Multinomial Logistic Regression Model. I would assume that this is because due to the sparse nature of this data, the more granular KNN classifier is able to better predict gender by looking at the gender of 6 of its neighbors.
+
+
+Next Steps:
+
+- Employ Regularization to try to reduce the bias in the dataset towards certain categories.
+
+- Supplement Data with Different Predictors.
+
+- Get more data. 
+    - After the proccessing and grouping we were left with only 222 values, and after splitting the data into train and test sets, the model is likely not able to make a good enough of a fit with the amount of data I am working with.
+
+- Dimmensionality Reduction.
+    - Due to the sparse nature of this dataset, after rolling up the county-level data into state data information was likely lost in the proccess. A Principal Component Analysis may help this problem.
+  
+- Include more features.
+    - This dataset has county locations per case, as well as time, so using these more granular features may increase model acccuracy by giving us more data to work with. The trade-off for choosing to do this would be that the model would be less interpretable, which is why in this analysis I chose to aggregate the data into statewide and annual levels.
+  
+
+Thank you for your time.
+Daniel Fields
